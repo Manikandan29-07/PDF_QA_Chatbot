@@ -1,0 +1,9 @@
+PyPDF2
+sentence_transformers==3.3.1
+groq
+faiss
+langchain
+pickle
+langchain-community
+dotenv
+streamlit
