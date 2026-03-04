@@ -8,6 +8,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.docstore.document import Document
 from sentence_transformers import SentenceTransformer
 from dotenv import load_dotenv
+from rank_bm25 import BM25Okapi
 from groq import Groq
 
 # Load environment variable
@@ -23,9 +24,15 @@ os.environ["LANGCHAIN_API_KEY"] = api_key
 
 client = Groq(api_key=api_key)
 
+
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("BAAI/bge-large-en-v1.5")
+
+
 # Using BAAI/bge-large-en-v1.5 which is specifically trained for semantic similarity
 try:
-    embedding_model = SentenceTransformer("BAAI/bge-large-en-v1.5")
+    embedding_model = load_model()
 except Exception as e:
     st.error(f"Failed to load main embedding model: {e}")
     embedding_model = SentenceTransformer("sentence-transformers/all-mpnet-base-v2")  # Strong fallback model
@@ -99,10 +106,14 @@ def EmbeddingToVectorDB(documents, file_path):
         
         faiss.write_index(index, file_path)
         
-        # Save the full document objects(Content + metadata) to pickle
+        # Introducing BM25 Hybrid Code - Toeknize the text for Keyword Searching
+        tokenized_corpus = [doc.page_content.lower().split() for doc in splits_docs]
+        bm25 = BM25Okapi(tokenized_corpus)
+        
+        # Save the full document objects(Content + metadata + BM25 index) to pickle
         with open(file_path.replace('.pkl', '_metadata.pkl'), "wb") as f:
-            pickle.dump(splits_docs, f)
-        return True
+            pickle.dump({'docs' : splits_docs, 'bm25' : bm25}, f)
+        return True 
     
     except Exception as e:
         st.error(f"Error in embedding process: {e}")
@@ -126,7 +137,7 @@ def expand_query(query):
     except Exception:
         return [query]
 
-def AskQuery(query, file_path, top_k=10, similarity_threshold=0.5):
+def AskQuery(query, file_path, top_k=5):
     if not query or not os.path.exists(file_path):
         return None
     
@@ -200,6 +211,9 @@ def getLLMOutPut(query, file_path):
     except Exception as e:
         st.error(f"An Error Occurred: {e}")
 
+if 'processed_file' not in st.session_state:
+    st.session_state.processed_file = None
+    
 # Streamlit UI
 st.title("Enhanced PDF Question Answering System")
 st.markdown("""
@@ -211,17 +225,25 @@ pdf_file = st.file_uploader("Upload your PDF", type=["pdf"])
 file_path = "faiss_store_hnsw.pkl"
 
 if pdf_file:
-    with st.spinner('Processing PDF... This may take a moment for larger documents.'):
-        documents = extract_text_with_metadata(pdf_file)
+    if st.session_state.processed_file != pdf_file.name:
+        with st.spinner('Processing PDF... This may take a moment for larger documents.'):
+            documents = extract_text_with_metadata(pdf_file)
         # Pass the list of Document objects to the VectorDB function
-        if documents and EmbeddingToVectorDB(documents, file_path):
-            st.success("PDF processed successfully and metadata attached")
-
+            if documents and EmbeddingToVectorDB(documents, file_path):
+                st.session_state.processed_file = pdf_file.name
+                st.success("PDF processed successfully and metadata attached")
+    else:
+        #If pdf is already processed, just show a quiet success message
+        st.info("PDF is loaded and ready. Ask away")
+        
 query = st.text_input("Enter your question:")
 if query:
-    with st.spinner('Searching for relevant information...'):
-        results = AskQuery(query, file_path)
+    with st.spinner('Searching...'):
+        results = AskQuery(query, file_path, top_k=10, similarity_threshold=0.2)
         if results:
+            st.write("Debugging")
+            for res in results:
+                st.info(res)
             getLLMOutPut(query, file_path)
         else:
-            st.warning("No relevant information found.")
+            st.warning("No relevant information found in VectorDB.")

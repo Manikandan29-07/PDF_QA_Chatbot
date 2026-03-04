@@ -96,9 +96,9 @@ def expand_query(query):
         Query: """ + query
         
         completion = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.3-70b-versatile",        #llama3-8b-8192
             messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
+            temperature=0.5,
             max_tokens=150
         )
         variations = completion.choices[0].message.content.strip().split('\n')
@@ -131,7 +131,7 @@ def AskQuery(query, file_path, top_k=10, similarity_threshold=0.5):
             for idx, distance in zip(indices[0], distances[0]):
                 if distance > similarity_threshold:
                     all_results.append((metadata[idx], distance))
-        
+
         # Remove duplicates and sort by similarity
         unique_results = {}
         for text, score in all_results:
@@ -141,8 +141,8 @@ def AskQuery(query, file_path, top_k=10, similarity_threshold=0.5):
         sorted_results = [text for text, _ in sorted(unique_results.items(), 
                                                    key=lambda x: x[1], 
                                                    reverse=True)]
-        
-        return sorted_results[:4] if sorted_results else None
+        print(sorted_results)
+        return sorted_results[:3] if sorted_results else None
         
     except Exception as e:
         st.error(f"Error in query process: {e}")
@@ -162,7 +162,7 @@ def getLLMOutPut(query, file_path):
         Answer:"""
         
         completion = client.chat.completions.create(
-            model="llama3-8b-8192",
+            model="llama-3.3-70b-versatile",       #llama3-8b-8192
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=1024
@@ -194,11 +194,6 @@ if query:
     with st.spinner('Searching for relevant information...'):
         results = AskQuery(query, file_path)
         if results:
-            st.header("Relevant Passages")
-            for i, text in enumerate(results, 1):
-                st.markdown(f"**Passage {i}:**")
-                st.write(text)
-                st.markdown("---")
             getLLMOutPut(query, file_path)
         else:
             st.warning("No relevant information found.")
