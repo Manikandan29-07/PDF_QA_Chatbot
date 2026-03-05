@@ -143,44 +143,49 @@ def AskQuery(query, file_path, top_k=5):
     
     try:
         # Get query variations for better semantic coverage
-        query_variations = expand_query(query)
+        query_variations = [query]
         
         index = faiss.read_index(file_path)
         with open(file_path.replace('.pkl', '_metadata.pkl'), "rb") as f:
-            metadata = pickle.load(f)
+            data = pickle.load(f)
+            metadata = data['docs']
+            bm25 = data['bm25']
         
-        all_results = []
+        all_results = {}  # Dictionary is used over array can hold combined scores,
         for variation in query_variations:
-            # Process query with instruction prefix
+            # FAISS Semantic Search
             processed_query = process_query(variation)
             query_embedding = embedding_model.encode([processed_query], 
                                                   normalize_embeddings=True)
             
             distances, indices = index.search(np.array(query_embedding, dtype=np.float32), k=top_k)
             
-            # Collect results from each variation
-            for idx, distance in zip(indices[0], distances[0]):
-                if distance > similarity_threshold:
-                    retrieved_doc = metadata[idx] # Now its a Document object
-                    all_results.append((retrieved_doc.page_content, retrieved_doc.metadata['page'], distance))
+            # BM25 Keyword Search
+            tokenized_query = variation.lower().split()
+            bm25_scores = bm25.get_scores(tokenized_query)
+            bm25_top_Indices = np.argsort(bm25_scores)[::-1][:top_k]
+            
+            
+            # Combine Scores (Simple Reciprocal Rank Fusion)
+            for rank, idx in enumerate(indices[0]):
+                if idx not in all_results:
+                    all_results[idx] = {'doc':metadata[idx], 'score':0}
+                all_results[idx]['score'] += 1.0 / (rank+1) # Adding FAISS rank score
+                
+            for rank, idx in enumerate(bm25_top_Indices):
+                if bm25_scores[idx] > 0 :
+                    if idx not in all_results:
+                        all_results[idx] = {'doc':metadata[idx], 'score':0}
+                    all_results[idx]['score'] += 1.0 / (rank+1) # Adding BM25 rank score
         
-        # Remove duplicates and sort by similarity
-        unique_results = {}
-        for text, page, score in all_results:
-            if text not in unique_results or score > unique_results[text]['score']:
-                unique_results[text] = {'page':page, 'score':score}
-        
-        sorted_results = sorted(
-            unique_results.items(),
-            key=lambda item: item[1]['score'],
-            reverse=True
-        )
-        
-        formatted_results = [
-            f"{text} [Source: Page {details['page']}]" 
-            for text, details in sorted_results[:3]
-        ]
-        return formatted_results
+        # Sort by combined highest score
+        sorted_results = sorted(all_results.values(), key=lambda x: x['score'], reverse = True)           
+                    
+        formatted_result = [
+            f"{item['doc'].page_content} [Source : Page {item['doc'].metadata['page']}]"
+            for item in sorted_results[:3]
+        ]      
+        return formatted_result
     
     except Exception as e:
         st.error(f"Error in query process: {e}")
@@ -239,7 +244,7 @@ if pdf_file:
 query = st.text_input("Enter your question:")
 if query:
     with st.spinner('Searching...'):
-        results = AskQuery(query, file_path, top_k=10, similarity_threshold=0.2)
+        results = AskQuery(query, file_path)
         if results:
             st.write("Debugging")
             for res in results:
